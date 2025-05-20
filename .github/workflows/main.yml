@@ -1,0 +1,41 @@
+name: Monitor Hello World (Dev Environment)
+on: [push, workflow_dispatch]
+
+jobs:
+  hello_world_job:
+    runs-on: ubuntu-latest
+    environment: dev 
+
+    steps:
+      - name: Set job start time
+        id: set_start_time
+        run: echo "JOB_START_TIME=$(date +%s%N)" >> $GITHUB_ENV
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Run Hello World
+        run: echo "Hello, world!"
+
+      - name: Send job metrics to Grafana
+        env:
+          PROM_REMOTE_WRITE_URL: ${{ secrets.GRAFANA_PROM_REMOTE_WRITE_URL }}
+          PROM_USERNAME: ${{ secrets.GRAFANA_PROM_USERNAME }}
+          PROM_PASSWORD: ${{ secrets.GRAFANA_PROM_PASSWORD }}
+          JOB_NAME: ${{ github.job }}
+          WORKFLOW_NAME: ${{ github.workflow }}
+        run: |
+          JOB_END_TIME=$(date +%s%N)
+          JOB_DURATION_SECONDS=$(echo "scale=3; ($JOB_END_TIME - ${{ env.JOB_START_TIME }}) / 1000000000" | bc)
+
+          cat <<EOF | curl -X POST -H "Content-Type: application/openmetrics-text" \
+            -u "${PROM_USERNAME}:${PROM_PASSWORD}" \
+            "${PROM_REMOTE_WRITE_URL}/api/v1/push/prometheus" \
+            --data-binary @-
+          # HELP github_actions_job_duration_seconds Duration of GitHub Actions jobs in seconds.
+          # TYPE github_actions_job_duration_seconds gauge
+          github_actions_job_duration_seconds{job_name="${{ env.JOB_NAME }}", workflow_name="${{ env.WORKFLOW_NAME }}", repository="${{ github.repository }}", run_id="${{ github.run_id }}", run_number="${{ github.run_number }}"} ${JOB_DURATION_SECONDS}
+          # HELP github_actions_job_runs_total Total number of GitHub Actions job runs.
+          # TYPE github_actions_job_runs_total counter
+          github_actions_job_runs_total{job_name="${{ env.JOB_NAME }}", workflow_name="${{ env.WORKFLOW_NAME }}", repository="${{ github.repository }}", run_id="${{ github.run_id }}", run_number="${{ github.run_number }}"} 1
+          EOF
